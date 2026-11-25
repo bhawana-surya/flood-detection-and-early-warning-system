@@ -1,0 +1,270 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// =====================================
+// PIN CONFIGURATION - ESP8266 NODEMCU
+// =====================================
+
+#define WATER_SENSOR A0
+#define BUZZER D5
+
+#define OLED_SDA D2
+#define OLED_SCL D1
+
+// =====================================
+// OLED CONFIGURATION
+// =====================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  OLED_RESET
+);
+
+// =====================================
+// SENSOR SETTINGS
+// =====================================
+
+// true  = reading increases in water
+// false = reading decreases in water
+const bool SENSOR_RISES_WHEN_WET = true;
+
+// Difference from dry calibration value
+const int WATER_ON_THRESHOLD = 60;
+const int WATER_OFF_THRESHOLD = 30;
+
+// =====================================
+// BUZZER SETTINGS
+// =====================================
+
+// For an active HIGH buzzer module.
+// Change to false if your buzzer is active LOW.
+const bool BUZZER_ACTIVE_HIGH = true;
+
+// =====================================
+// VARIABLES
+// =====================================
+
+int dryBaseline = 0;
+int sensorValue = 0;
+int sensorDifference = 0;
+
+bool waterDetected = false;
+
+unsigned long previousMillis = 0;
+const unsigned long SENSOR_INTERVAL = 150;
+
+// =====================================
+// BUZZER FUNCTIONS
+// =====================================
+
+void buzzerON() {
+  digitalWrite(
+    BUZZER,
+    BUZZER_ACTIVE_HIGH ? HIGH : LOW
+  );
+}
+
+void buzzerOFF() {
+  digitalWrite(
+    BUZZER,
+    BUZZER_ACTIVE_HIGH ? LOW : HIGH
+  );
+}
+
+// =====================================
+// SENSOR CALIBRATION
+// Keep sensor completely dry at startup
+// =====================================
+
+void calibrateDrySensor() {
+
+  Serial.println("Calibrating sensor...");
+  Serial.println("Keep sensor completely DRY!");
+
+  long total = 0;
+
+  for (int i = 0; i < 40; i++) {
+    total += analogRead(WATER_SENSOR);
+    delay(50);
+  }
+
+  dryBaseline = total / 40;
+
+  Serial.print("Dry baseline: ");
+  Serial.println(dryBaseline);
+}
+
+// =====================================
+// READ SENSOR
+// =====================================
+
+int readSensor() {
+
+  long total = 0;
+
+  for (int i = 0; i < 5; i++) {
+    total += analogRead(WATER_SENSOR);
+    delay(5);
+  }
+
+  return total / 5;
+}
+
+// =====================================
+// OLED DISPLAY
+// =====================================
+
+void updateOLED() {
+
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(20, 0);
+  display.println("WATER DETECTION");
+
+  display.drawLine(0, 12, 127, 12, SSD1306_WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(5, 22);
+
+  if (waterDetected) {
+    display.println("WATER!");
+  } else {
+    display.println("DRY");
+  }
+
+  display.setTextSize(1);
+
+  display.setCursor(5, 47);
+  display.print("Sensor: ");
+  display.println(sensorValue);
+
+  display.setCursor(5, 57);
+  display.print("Buzzer: ");
+  display.println(waterDetected ? "ON" : "OFF");
+
+  display.display();
+}
+
+// =====================================
+// WATER DETECTION + BUZZER CONTROL
+// =====================================
+
+void checkWater() {
+
+  sensorValue = readSensor();
+
+  if (SENSOR_RISES_WHEN_WET) {
+    sensorDifference = sensorValue - dryBaseline;
+  } else {
+    sensorDifference = dryBaseline - sensorValue;
+  }
+
+  // Turn ON when water is detected.
+  if (!waterDetected &&
+      sensorDifference >= WATER_ON_THRESHOLD) {
+
+    waterDetected = true;
+
+    Serial.println("WATER DETECTED!");
+  }
+
+  // Turn OFF when sensor becomes dry.
+  if (waterDetected &&
+      sensorDifference <= WATER_OFF_THRESHOLD) {
+
+    waterDetected = false;
+
+    Serial.println("SENSOR DRY!");
+  }
+
+  // Continuous buzzer sound only in water.
+  if (waterDetected) {
+    buzzerON();
+  } else {
+    buzzerOFF();
+  }
+
+  updateOLED();
+
+  // Serial debugging
+  Serial.print("Raw: ");
+  Serial.print(sensorValue);
+
+  Serial.print(" | Difference: ");
+  Serial.print(sensorDifference);
+
+  Serial.print(" | Water: ");
+  Serial.print(waterDetected ? "YES" : "NO");
+
+  Serial.print(" | Buzzer: ");
+  Serial.println(waterDetected ? "ON" : "OFF");
+}
+
+// =====================================
+// SETUP
+// =====================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  // Initialize buzzer and keep it OFF.
+  pinMode(BUZZER, OUTPUT);
+  buzzerOFF();
+
+  // Initialize OLED.
+  Wire.begin(OLED_SDA, OLED_SCL);
+
+  if (!display.begin(
+        SSD1306_SWITCHCAPVCC,
+        0x3C)) {
+
+    Serial.println("OLED initialization failed!");
+  } else {
+
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(10, 20);
+    display.println("Water Detection");
+    display.println("Starting...");
+    display.display();
+  }
+
+  delay(1000);
+
+  // Calibrate with sensor completely dry.
+  calibrateDrySensor();
+
+  waterDetected = false;
+  buzzerOFF();
+
+  Serial.println("======================");
+  Serial.println("SYSTEM READY");
+  Serial.println("======================");
+}
+
+// =====================================
+// MAIN LOOP
+// =====================================
+
+void loop() {
+
+  if (millis() - previousMillis >= SENSOR_INTERVAL) {
+
+    previousMillis = millis();
+
+    checkWater();
+  }
+}
